@@ -3,6 +3,8 @@ import logging
 import json
 import re
 import typer
+from typing import Tuple
+from typing_extensions import Annotated
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 
@@ -124,6 +126,51 @@ def get_webaclid_arn(session, name, id):
 
     webAclArn = response['WebACL']['ARN']
     return webAclArn
+
+
+def maintenance_mode_to_all_distribution(enabled: bool = typer.Option(False, help="If provide remove maintenance"),
+                                         disabled: bool = typer.Option(False, help="If provide remove maintenance"),
+                                         maintenance_web_acl_name: str = typer.Argument("default",
+                                                                                        help="Name of maintenance web acl"),
+                                         maintenance_web_acl_id: str = typer.Argument("default",
+                                                                                      help="ID of maintenance web acl"),
+                                         profile: str = typer.Option("default", help="AWS profile")):
+    session = boto3.Session(profile_name=profile, region_name="us-east-1")
+    cloudfront = session.client('cloudfront')
+
+    #
+    web_acl_arn = get_webaclid_arn(session, maintenance_web_acl_name, maintenance_web_acl_id)
+
+    cdn_list = get_all_distributions(cloudfront)
+
+    if enabled and disabled:
+        print("Invalid combination of enable or disable provided")
+        print("You can use only one flag at time")
+        exit(-1)
+    if not enabled and not disabled:
+        print("Choose if enable or disable maintenance")
+        print("You can use only one flag at time")
+        exit(-1)
+
+    for cdn in cdn_list:
+        cdn_arn = get_cdn_arn(cloudfront, cdn)
+
+        if enabled:
+            print(f"Enable maintenance for Distribution {cdn}")
+
+            remove_cdn_waf_tag(cloudfront, cdn_arn)
+            config = get_cdn_config(cloudfront, cdn)
+            cdn_config = config['DistributionConfig']
+            etag = config['ETag']
+
+            # Change
+            cdn_config['WebACLId'] = web_acl_arn
+            update_cdn_distribution(cloudfront, cdn, cdn_config, etag)
+
+        elif disabled:
+            print(f"Disable maintenance for Distribution {cdn}")
+
+            add_cdn_waf_tag(cloudfront, cdn_arn)
 
 
 # ToDo
@@ -250,16 +297,14 @@ def revert_update_all_cdns(profile: str = typer.Argument(..., help="AWS profile 
                            src_env_name: str = typer.Argument(..., help="Source terraform environment name"),
                            dst_env_name: str = typer.Argument(..., help="Destination terraform environment name"),
                            be: str = typer.Argument(..., help="DNS name of the alb used for backend"),
-                           origin_name_to_skip: str = typer.Argument(..., help="Comma separated list to origin name to skip")):
-
-
+                           origin_name_to_skip: str = typer.Argument(...,
+                                                                     help="Comma separated list to origin name to skip")):
     session_dst = boto3.Session(profile_name=profile, region_name=dst_region)
 
     cloudfront_client = session_dst.client('cloudfront')
     cdns = get_all_distributions(cloudfront_client)
 
     origin_name_to_skip = origin_name_to_skip.split(',')
-
 
     for cdn in cdns:
         #Aggiungo il tag del waf centralizzato
@@ -280,7 +325,7 @@ def revert_update_all_cdns(profile: str = typer.Argument(..., help="AWS profile 
                     logging.info(
                         'Skipping origin ' + origin_domain + ' in distribution ' + cdn + ' because already updated')
                 else:
-                    if origin_domain not in origin_name_to_skip  and (
+                    if origin_domain not in origin_name_to_skip and (
                             '.s3.' in origin_domain or '.s3-' in origin_domain):
 
                         src_bucket_name = get_bucket_name_from_endpoint(
