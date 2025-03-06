@@ -1,0 +1,12 @@
+[
+    {
+        "distribution_id": "E2EAI4",
+        "s3_origin_frontend": "usbim-primus-bdi-prod.s3-website.eu-south-1.amazonaws.com",
+        "s3_data_bucket": "usbim--api-bs3.eu-south-1.amazonaws.com",
+        "be_origin": "usbim-bdi-prod--alb-.eu-south-1.elb.amazonaws.com"
+    },
+    {
+        "distribution_id": "E338KP4",
+        "s3_origin_data": "usbim-primus-bdi-prod-bucket.s3.amazonaws.com"
+    }
+]
