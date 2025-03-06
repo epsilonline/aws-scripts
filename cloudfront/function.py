@@ -68,17 +68,15 @@ def get_buckets_by_prefix(session, prefix):
 
     return resource[0]
 
-
 def get_cdn_arn(client, cdn):
     try:
         responce = client.get_distribution(
-            Id=cdn
+                Id=cdn
         )
 
         return responce['Distribution']['ARN']
     except Exception as e:
         logging.error(e)
-
 
 def remove_cdn_waf_tag(client, cdn_arn):
     try:
@@ -93,7 +91,6 @@ def remove_cdn_waf_tag(client, cdn_arn):
 
     except Exception as e:
         logging.error(e)
-
 
 def add_cdn_waf_tag(client, cdn_arn):
     try:
@@ -112,7 +109,6 @@ def add_cdn_waf_tag(client, cdn_arn):
     except Exception as e:
         logging.error(e)
 
-
 def get_webaclid_arn(session, name, id):
     wafv2 = session.client('wafv2')
 
@@ -125,16 +121,16 @@ def get_webaclid_arn(session, name, id):
     webAclArn = response['WebACL']['ARN']
     return webAclArn
 
-
 # ToDo
 # 1) Chiamare update distribution solo se ci sono dei cambiamenti nella config
 # 2) Mettere la possibilità di chiedere conferma per i cambiamenti della configurazione
 def update_cdn_with_json(profile: str = typer.Argument(..., help="AWS profile for auth"),
-                         region: str = typer.Argument(..., help="AWS region for auth")):
+                         region: str = typer.Argument(..., help="AWS region for auth"),
+                         file_path: str = typer.Argument(..., help="Json file path that contains distribution configurations")):
     session = boto3.Session(profile_name=profile, region_name=region)
     cloudfront = session.client('cloudfront')
 
-    with open('distributions.json', 'r') as file:
+    with open(file_path, 'r') as file:
         data = json.load(file)
 
     if len(data) > 0:
@@ -175,40 +171,23 @@ def update_cdn_with_json(profile: str = typer.Argument(..., help="AWS profile fo
         raise SystemExit(1)
 
 
-#ToDo
-#1) Fare switch della web acl solo se sono forniti name e id, controllare che se uno è fornito lo sia anche l'altro
 def update_all_cdns(profile: str = typer.Argument(..., help="AWS profile for auth"),
                     src_region: str = typer.Argument(..., help="Source AWS region for auth"),
                     dst_region: str = typer.Argument(..., help="Destination AWS region for auth"),
                     src_env_name: str = typer.Argument(..., help="Source terraform environment name"),
                     dst_env_name: str = typer.Argument(..., help="Destination terraform environment name"),
-                    be: str = typer.Argument(..., help="DNS name of the alb used for backend"),
-                    web_acl_name: str = typer.Argument(...,
-                                                       help="Name of the Web ACL you want to use for distribution"),
-                    web_acl_id: str = typer.Argument(..., help="Id of the Web ACL you want to use for distribution"),
-                    origin_name_to_skip: str = typer.Argument(..., help="Comma separated list to origin name to skip")):
+                    be: str = typer.Argument(..., help="DNS name of the alb used for backend")):
     session_dst = boto3.Session(profile_name=profile, region_name=dst_region)
-    session_cdn = boto3.Session(profile_name=profile, region_name='us-east-1')
+    session_cdn = boto3.Session(profile_name = profile, region_name='us-east-1')
 
-    origin_name_to_skip = origin_name_to_skip.split(',')
-
-    # Prendo l'arn della web acl
-    webAclArn = get_webaclid_arn(session_cdn, web_acl_name, web_acl_id)
-
-    cloudfront_client = session_dst.client('cloudfront')
+    cloudfront_client = session_cdn.client('cloudfront')
     cdns = get_all_distributions(cloudfront_client)
 
     for cdn in cdns:
-        # Rimuovo il tag del waf centralizzato
-        cdn_arn = get_cdn_arn(cloudfront_client, cdn)
-        remove_cdn_waf_tag(cloudfront_client, cdn_arn)
 
         config = get_cdn_config(cloudfront_client, cdn)
         cdn_config = config['DistributionConfig']
         etag = config['ETag']
-
-        # Modifico la web acl id
-        cdn_config['WebACLId'] = webAclArn
 
         items = cdn_config['Origins']['Items']
 
@@ -217,21 +196,20 @@ def update_all_cdns(profile: str = typer.Argument(..., help="AWS profile for aut
                 origin_domain = origin['DomainName']
 
                 if dst_env_name in origin_domain:
-                    logging.info(
-                        'Skipping origin ' + origin_domain + ' in distribution ' + cdn + ' because already updated')
+                    logging.info('Skipping origin ' + origin_domain + ' in distribution ' + cdn + ' because already updated')
                 else:
-                    if origin_domain not in origin_name_to_skip and (
+                    if '***REMOVED***-maintenance-pages' not in origin_domain and '***REMOVED***-***REMOVED***-static' not in origin_domain and (
                             '.s3.' in origin_domain or '.s3-' in origin_domain):
 
                         src_bucket_name = get_bucket_name_from_endpoint(
                             origin_domain)  #Prendo il nome del bucket dal domain name dell'origin
                         valid_src_bucket_name = make_name_valid_for_search(src_bucket_name, src_env_name,
-                                                                           dst_env_name)  #Tolgo i numeri dal nome del bucket e cambio il nome dell'environment
+                                                                        dst_env_name)  #Tolgo i numeri dal nome del bucket e cambio il nome dell'environment
                         dst_resource = get_buckets_by_prefix(session_dst,
-                                                             valid_src_bucket_name)  #Prendo il bucket corrispondente di dr con il nome ottenuto prima
+                                                            valid_src_bucket_name)  #Prendo il bucket corrispondente di dr con il nome ottenuto prima
 
                         origin_domain = origin_domain.replace(src_region,
-                                                              dst_region)  #sotituisco la region nel domain name dell'origin
+                                                            dst_region)  #sotituisco la region nel domain name dell'origin
                         origin['DomainName'] = origin_domain.replace(src_bucket_name, dst_resource)
                     elif '.elb.' in origin_domain:
                         origin['DomainName'] = be
@@ -240,31 +218,21 @@ def update_all_cdns(profile: str = typer.Argument(..., help="AWS profile for aut
 
         update_cdn_distribution(cloudfront_client, cdn, cdn_config, etag)
 
-
 #ToDo
 #1) Cambiare logica
 #Passo le variabili src e dst in modo inverso alle funzioni rispetto a update_all_cdns
 def revert_update_all_cdns(profile: str = typer.Argument(..., help="AWS profile for auth"),
-                           src_region: str = typer.Argument(..., help="Source AWS region for auth"),
-                           dst_region: str = typer.Argument(..., help="Destination AWS region for auth"),
-                           src_env_name: str = typer.Argument(..., help="Source terraform environment name"),
-                           dst_env_name: str = typer.Argument(..., help="Destination terraform environment name"),
-                           be: str = typer.Argument(..., help="DNS name of the alb used for backend"),
-                           origin_name_to_skip: str = typer.Argument(..., help="Comma separated list to origin name to skip")):
-
-
+                    src_region: str = typer.Argument(..., help="Source AWS region for auth"),
+                    dst_region: str = typer.Argument(..., help="Destination AWS region for auth"),
+                    src_env_name: str = typer.Argument(..., help="Source terraform environment name"),
+                    dst_env_name: str = typer.Argument(..., help="Destination terraform environment name"),
+                    be: str = typer.Argument(..., help="DNS name of the alb used for backend")):
     session_dst = boto3.Session(profile_name=profile, region_name=dst_region)
 
     cloudfront_client = session_dst.client('cloudfront')
     cdns = get_all_distributions(cloudfront_client)
 
-    origin_name_to_skip = origin_name_to_skip.split(',')
-
-
     for cdn in cdns:
-        #Aggiungo il tag del waf centralizzato
-        cdn_arn = get_cdn_arn(cloudfront_client, cdn)
-        add_cdn_waf_tag(cloudfront_client, cdn_arn)
 
         config = get_cdn_config(cloudfront_client, cdn)
         cdn_config = config['DistributionConfig']
@@ -277,21 +245,20 @@ def revert_update_all_cdns(profile: str = typer.Argument(..., help="AWS profile 
                 origin_domain = origin['DomainName']
 
                 if dst_env_name not in origin_domain:
-                    logging.info(
-                        'Skipping origin ' + origin_domain + ' in distribution ' + cdn + ' because already updated')
+                    logging.info('Skipping origin ' + origin_domain + ' in distribution ' + cdn + ' because already updated')
                 else:
-                    if origin_domain not in origin_name_to_skip  and (
+                    if '***REMOVED***-maintenance-pages' not in origin_domain and '***REMOVED***-***REMOVED***-static' not in origin_domain and (
                             '.s3.' in origin_domain or '.s3-' in origin_domain):
 
                         src_bucket_name = get_bucket_name_from_endpoint(
                             origin_domain)  #Prendo il nome del bucket dal domain name dell'origin
                         valid_src_bucket_name = make_name_valid_for_search(src_bucket_name, dst_env_name,
-                                                                           src_env_name)  #Tolgo i numeri dal nome del bucket e cambio il nome dell'environment
+                                                                        src_env_name)  #Tolgo i numeri dal nome del bucket e cambio il nome dell'environment
                         dst_resource = get_buckets_by_prefix(session_dst,
-                                                             valid_src_bucket_name)  #Prendo il bucket corrispondente di primario con il nome ottenuto prima
+                                                            valid_src_bucket_name)  #Prendo il bucket corrispondente di primario con il nome ottenuto prima
 
                         origin_domain = origin_domain.replace(dst_region,
-                                                              src_region)  #sotituisco la region nel domain name dell'origin
+                                                            src_region)  #sotituisco la region nel domain name dell'origin
                         origin['DomainName'] = origin_domain.replace(src_bucket_name, dst_resource)
                     elif '.elb.' in origin_domain:
                         origin['DomainName'] = be
@@ -300,19 +267,16 @@ def revert_update_all_cdns(profile: str = typer.Argument(..., help="AWS profile 
 
         update_cdn_distribution(cloudfront_client, cdn, cdn_config, etag)
 
-
 def update_all_cdns_tls_version(profile: str = typer.Argument(..., help="AWS profile for auth"),
-                                tls_version: str = typer.Argument(...,
-                                                                  help="TLS version you want to apply on all cdns")):
-    session_cdn = boto3.Session(profile_name=profile, region_name='us-east-1')
+                                tls_version: str = typer.Argument(..., help="TLS version you want to apply on all cdns")):
+
+    session_cdn = boto3.Session(profile_name = profile, region_name='us-east-1')
     cloudfront_client = session_cdn.client('cloudfront')
 
     #Controllo che la versione di tls fornita sia valida
-    valid_tls_versions = ['SSLv3', 'TLSv1', 'TLSv1_2016', 'TLSv1.1_2016', 'TLSv1.2_2018', 'TLSv1.2_2019',
-                          'TLSv1.2_2021']
+    valid_tls_versions = ['SSLv3', 'TLSv1', 'TLSv1_2016', 'TLSv1.1_2016', 'TLSv1.2_2018', 'TLSv1.2_2019', 'TLSv1.2_2021']
     if tls_version not in valid_tls_versions:
-        logging.error(
-            'Invalid TLS version provided, valid version are: {}'.format(', '.join(map(str, valid_tls_versions))))
+        logging.error('Invalid TLS version provided, valid version are: {}'.format(', '.join(map(str, valid_tls_versions))))
         raise SystemExit(1)
 
     cdns = get_all_distributions(cloudfront_client)
@@ -332,4 +296,4 @@ def update_all_cdns_tls_version(profile: str = typer.Argument(..., help="AWS pro
                 update_cdn_distribution(cloudfront_client, cdn, cdn_config, etag)
                 logging.info('Cdn ' + cdn + ' tls version has been updated')
         except Exception:
-            logging.error('Error while updating cdn ' + cdn)
+                logging.error('Error while updating cdn ' + cdn)

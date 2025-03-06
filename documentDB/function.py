@@ -11,8 +11,7 @@ import typer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 
-
-def get_mongo_handler(profile, region, mongo_dst_host, pwd_ssm_path):
+def get_mongo_handler(profile, region, mongo_dst_host, pwd_ssm_path, cwd):
     try:
         session = boto3.Session(profile_name=profile)
         ssm = session.client('ssm', region_name=region)
@@ -28,10 +27,10 @@ def get_mongo_handler(profile, region, mongo_dst_host, pwd_ssm_path):
         raise SystemExit(1)
 
     try:
-        if not os.path.exists('./documentDB/cert'):
-            os.makedirs('./documentDB/cert')
+        if not os.path.exists(cwd + '/cert'):
+            os.makedirs(cwd + '/cert')
             response = requests.get('https://truststore.pki.rds.amazonaws.com/' + region + '/' + region + '-bundle.pem')
-            with open("documentDB/cert/global-bundle.pem", mode="wb") as file:
+            with open(cwd + "/cert/global-bundle.pem", mode="wb") as file:
                 file.write(response.content)
     except Exception as e:
         logging.error('Error during mongo certificate download : ' + e)
@@ -42,7 +41,7 @@ def get_mongo_handler(profile, region, mongo_dst_host, pwd_ssm_path):
         'host': mongo_dst_host + ':27017',
         'username': 'docudbadmin',
         'password': pwd,
-        'extra_options': '?tls=true&tlsCAFile=documentDB%2Fcert%2Fglobal-bundle.pem&retryWrites=false',
+        'extra_options': '?tls=true&tlsCAFile=' + cwd + '%2Fcert%2Fglobal-bundle.pem&retryWrites=false',
     }
 
     mongo_handler = PyMongoBackupRestore(**config)
@@ -55,9 +54,9 @@ def get_mongo_handler(profile, region, mongo_dst_host, pwd_ssm_path):
     return mongo_handler
 
 
-def create_user(client):
+def create_user(client, users_file_path):
     try:
-        with open('./documentDB/data/users.csv', 'r') as file:
+        with open(users_file_path, 'r') as file:
             csv_reader = csv.DictReader(file)
 
             for row in csv_reader:
@@ -73,11 +72,11 @@ def create_user(client):
         raise SystemExit(1)
 
 
-def get_dbs():
+def get_dbs(dbs_file_path):
     dbs = {}
 
     try:
-        with open('./documentDB/data/dbs.csv', 'r') as file:
+        with open(dbs_file_path, 'r') as file:
             csv_reader = csv.DictReader(file)
 
             for row in csv_reader:
@@ -96,36 +95,41 @@ def get_backup_keys(client, bucket, dbs):
     response = client.list_objects_v2(
         Bucket=bucket
     )
-    for item in response['Contents']:
-        key = item['Key']
-        for db in dbs:
-            if db in key and dbs[db] in key:
-                keys.append(key)
 
-    return keys
+    if response['KeyCount'] != 0:
+        for item in response['Contents']:
+            key = item['Key']
+            for db in dbs:
+                if db in key and dbs[db] in key:
+                    keys.append(key)
+
+        return keys
+    else:
+        logging.error('Bucket is empty')
+        raise SystemExit(1)
 
 
-def download_backups(client, bucket, dbs):
+def download_backups(client, bucket, dbs, cwd):
     # Lasciato per futura alberatura del bucket backup
     keys = get_backup_keys(client, bucket, dbs)
 
     for key in keys:
-        client.download_file(bucket, key, 'documentDB/dump.tar.gz')
-        unzip_file = tarfile.open('./documentDB/dump.tar.gz')
-        unzip_file.extractall('./documentDB/')
+        client.download_file(bucket, key, cwd + '/dump.tar.gz')
+        unzip_file = tarfile.open(cwd + '/dump.tar.gz')
+        unzip_file.extractall(cwd + '/')
         unzip_file.close()
-        os.remove('./documentDB/dump.tar.gz')
+        os.remove(cwd + '/dump.tar.gz')
 
 
-def get_backups_folder(profile, region, bucket, dbs):
+def get_backups_folder(profile, region, bucket, dbs, cwd):
     try:
         session = boto3.Session(profile_name=profile)
         s3 = session.client('s3', region_name=region)
 
-        if not os.path.exists('./documentDB/dump'):
+        if not os.path.exists(cwd + '/dump'):
 
-            download_backups(s3, bucket, dbs)
-            logging.info('Dumps saved in ./documentDB/dump')
+            download_backups(s3, bucket, dbs, cwd)
+            logging.info('Dumps saved in ' + cwd + '/dump')
         else:
             answer = input('Database dumps already here, do you want to re download? (y, n) ')
 
@@ -134,7 +138,7 @@ def get_backups_folder(profile, region, bucket, dbs):
                 raise SystemExit(1)
 
             elif answer == 'y':
-                shutil.rmtree('./documentDB/dump')
+                shutil.rmtree(cwd + '/dump')
                 download_backups(s3, bucket, dbs)
                 logging.info('Dumps re downloaded in dump folder')
 
@@ -146,12 +150,12 @@ def get_backups_folder(profile, region, bucket, dbs):
         raise SystemExit(1)
 
 
-def restore_database(mongo_handler, dbs):
+def restore_database(mongo_handler, dbs, cwd):
     for db in dbs:
         try:
             mongo_handler.restore(
                 database_name=db,  # Target Database Name
-                backup_folder='./documentDB/dump/' + db,
+                backup_folder=cwd + '/dump/' + db,
             )
         except:
             logging.error('Errore durante il restore del database ' + db)
@@ -160,18 +164,25 @@ def restore_database(mongo_handler, dbs):
 def create_users(profile: str = typer.Argument(..., help="AWS profile for auth"),
                  region: str = typer.Argument(..., help="AWS region for auth"),
                  host: str = typer.Argument(..., help="DocumentDB host"),
-                 pwd_ssm_path: str = typer.Argument(..., help="DocumentDB password ssm path")):
+                 pwd_ssm_path: str = typer.Argument(..., help="DocumentDB password ssm path"),
+                 users_file_path: str = typer.Argument(..., help="Csv file path that contains users to create")):
     mongo_handler = get_mongo_handler(profile, region, host, pwd_ssm_path)
     client = MongoClient(mongo_handler.get_uri())
-    create_user(client)
+    create_user(client, users_file_path)
 
 
 def restore_dbs(profile: str = typer.Argument(..., help="AWS profile for auth"),
                 region: str = typer.Argument(..., help="AWS region for auth"),
                 host: str = typer.Argument(..., help="DocumentDB host"),
                 pwd_ssm_path: str = typer.Argument(..., help="DocumentDB password ssm path"),
-                backup_bucket: str = typer.Argument(..., help="Bucket where documentdb backups are stored")):
-    mongo_handler = get_mongo_handler(profile, region, host, pwd_ssm_path)
-    dbs = get_dbs()
-    get_backups_folder(profile, region, backup_bucket, dbs)
-    restore_database(mongo_handler, dbs)
+                backup_bucket: str = typer.Argument(..., help="Bucket where documentdb backups are stored"),
+                dbs_file_path: str = typer.Argument(..., help="Csv file path that contains dbs to restore")):
+    cwd = os.path.dirname(dbs_file_path)
+
+    logging.info('Dump folder: ' + cwd + '/dump')
+    logging.info('Certificate folder: ' + cwd + '/cert')
+
+    mongo_handler = get_mongo_handler(profile, region, host, pwd_ssm_path, cwd)
+    dbs = get_dbs(dbs_file_path)
+    get_backups_folder(profile, region, backup_bucket, dbs, cwd)
+    restore_database(mongo_handler, dbs, cwd)
