@@ -6,10 +6,10 @@ import typer
 logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 
 
-def get_resources():
+def get_resources(file_path):
     resources = {}
 
-    with open('./backup/resources.csv', 'r') as file:
+    with open(file_path, 'r') as file:
         csv_reader = csv.DictReader(file)
 
         for row in csv_reader:
@@ -145,10 +145,10 @@ def start_restore_job(session, region, vault_name, recovery_point_arn, backup_ro
     logging.info('RESTORE JOB STATUS : ' + restore_job_state)
 
 
-def launch_restore_jobs(profile, region, vault_name):
+def launch_restore_jobs(profile, region, vault_name, file_path):
     session = boto3.Session(profile_name=profile)
 
-    resources = get_resources()
+    resources = get_resources(file_path)
 
     for resource in resources:
         filtered_iterator = list_recovery_points_by_backup_vault(session, region, vault_name, resource)
@@ -156,13 +156,11 @@ def launch_restore_jobs(profile, region, vault_name):
             for key_data in filtered_iterator:
                 vault = key_data['BackupVaultName']
                 recovery_point = key_data['RecoveryPointArn']
-                key = key_data['EncryptionKeyArn']
                 restore_role_arn = key_data['IamRoleArn']
                 is_encrypted = key_data['IsEncrypted']
                 if is_encrypted:
                     key = key_data['EncryptionKeyArn']
-                    start_restore_job(session, region, vault, recovery_point, restore_role_arn, resources[resource],
-                                      key)
+                    start_restore_job(session, region, vault, recovery_point, restore_role_arn, resources[resource], key)
                 else:
                     start_restore_job(session, region, vault, recovery_point, restore_role_arn, resources[resource])
         else:
@@ -171,5 +169,6 @@ def launch_restore_jobs(profile, region, vault_name):
 
 def start_restore_jobs(profile: str = typer.Argument(..., help="AWS profile for auth"),
                        region: str = typer.Argument(..., help="AWS region for auth"),
-                       vault_name: str = typer.Argument(..., help="Backups vault name")):
-    launch_restore_jobs(profile, region, vault_name)
+                       vault_name: str = typer.Argument(..., help="Backups vault name"),
+                       file_path: str = typer.Argument(..., help="Csv file path that contains source and destination resource names that have to be restored")):
+    launch_restore_jobs(profile, region, vault_name, file_path)
