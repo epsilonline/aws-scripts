@@ -111,6 +111,7 @@ def add_cdn_waf_tag(client, cdn_arn):
     except Exception as e:
         logging.error(e)
 
+
 def get_webaclid_arn(session, name, id):
     wafv2 = session.client('wafv2')
 
@@ -126,11 +127,11 @@ def get_webaclid_arn(session, name, id):
 
 def maintenance_mode_to_all_distribution(enabled: bool = typer.Option(False, help="If provide remove maintenance"),
                                          disabled: bool = typer.Option(False, help="If provide remove maintenance"),
-                                         maintenance_web_acl_name: str = typer.Argument("default",
+                                         maintenance_web_acl_name: str = typer.Argument(...,
                                                                                         help="Name of maintenance web acl"),
-                                         maintenance_web_acl_id: str = typer.Argument("default",
+                                         maintenance_web_acl_id: str = typer.Argument(...,
                                                                                       help="ID of maintenance web acl"),
-                                         profile: str = typer.Option("default", help="AWS profile")):
+                                         profile: str = typer.Option(None, help="AWS profile")):
     session = boto3.Session(profile_name=profile, region_name="us-east-1")
     cloudfront = session.client('cloudfront')
 
