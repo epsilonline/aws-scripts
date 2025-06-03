@@ -1,0 +1,12 @@
+[
+    {
+        "distribution_id": "E2EAI4",
+        "s3_origin_frontend": "website.eu-south-1.amazonaws.com",
+        "s3_data_bucket": "data.eu-south-1.amazonaws.com",
+        "be_origin": "be.eu-south-1.elb.amazonaws.com"
+    },
+    {
+        "distribution_id": "E338KP4",
+        "s3_origin_data": "data3.s3.amazonaws.com"
+    }
+]
