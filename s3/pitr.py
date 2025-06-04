@@ -3,7 +3,6 @@ import csv
 import os
 import time
 import typer
-from typing import List, Optional
 from botocore.exceptions import ClientError
 import logging
 import re
@@ -26,7 +25,7 @@ SPLIT_COLUMN_NAME = 'bucketname'
 TABLE_NAME = 'events-pitr_demo_wtzb6eiepe_7ihznpek1f_inventory'
 QUERIES_FOLDER = './queries/'
 
-time_validation_regex=re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)")
+time_validation_regex = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)")
 
 ACTION_CONFIGURATION = {
     "restore": {
@@ -131,8 +130,6 @@ def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: st
                 writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer.writerow(row)
-            if remove_header:
-                writer.writeheader()
 
     # Close all split files
     for f in split_files.values():
@@ -201,8 +198,7 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
             'Location': {
                 'ObjectArn': f'arn:aws:s3:::{manifest_s3_uri.split("s3://")[1]}',
                 "ETag": manifest_s3['ETag'],
-                "ObjectVersionId": manifest_s3['VersionId']
-            }
+            }.update({"VersionId": manifest_s3.get('VersionId')} if 'VersionId' in manifest_s3 else {})
         },
         Priority=10,
         RoleArn=iam_role_arn,
@@ -274,7 +270,7 @@ def do_action(
         # 3. Split the CSV file
         logger.info(f"Splitting CSV file by column '{SPLIT_COLUMN_NAME}'...")
         try:
-            split_files = split_csv_file(local_csv_file, SPLIT_COLUMN_NAME, extra_name_suffix=action, remove_header=action=='delete')
+            split_files = split_csv_file(local_csv_file, SPLIT_COLUMN_NAME, extra_name_suffix=action)
             logger.info(f"Split into files: {split_files}")
 
             # 4. Upload split files to S3
