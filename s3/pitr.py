@@ -115,7 +115,7 @@ def download_s3_file(bucket: str, key: str, local_path: str):
     s3_client.download_file(bucket, key, local_path)
 
 
-def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: str = ""):
+def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: str = "", remove_header: bool = False):
     """Splits a CSV file based on a specified column."""
     split_files = {}
     with open(file_path, 'r') as infile:
@@ -131,6 +131,8 @@ def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: st
                 writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer.writerow(row)
+            if remove_header:
+                writer.writeheader()
 
     # Close all split files
     for f in split_files.values():
@@ -272,7 +274,7 @@ def do_action(
         # 3. Split the CSV file
         logger.info(f"Splitting CSV file by column '{SPLIT_COLUMN_NAME}'...")
         try:
-            split_files = split_csv_file(local_csv_file, SPLIT_COLUMN_NAME, extra_name_suffix=action)
+            split_files = split_csv_file(local_csv_file, SPLIT_COLUMN_NAME, extra_name_suffix=action, remove_header=action=='delete')
             logger.info(f"Split into files: {split_files}")
 
             # 4. Upload split files to S3
