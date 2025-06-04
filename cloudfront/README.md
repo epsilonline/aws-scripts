@@ -7,7 +7,7 @@ Helper script for AWS Cloudfront.
 ## Available commands
 
 - **update-cdn-with-json**: change origin on cloudfront distribution 
-- **update-all-cdns**: change origin for implement dr strategy in ***REMOVED***, AKA switch region
+- **update-all-cdns**: change origin in bulk mode
 
 ## Usage
 ```Bash
