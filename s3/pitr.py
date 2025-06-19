@@ -426,6 +426,149 @@ def pitr(
         )
 
 
+def get_latest_s3_version(s3_client: boto3.client, bucket_name: str, key: str) -> Dict[str, Any] | None:
+    """
+    Fetches the latest version information for a given S3 object.
+    Returns a dictionary with processed data or None if no latest version is found or an error occurs.
+    """
+    try:
+        response = s3_client.list_object_versions(Bucket=bucket_name, Prefix=key)
+        versions = response.get("Versions", [])
+        delete_markers = response.get("DeleteMarkers", [])
+
+        all_versions = sorted(
+            versions + delete_markers,
+            key=lambda x: x['LastModified'],
+            reverse=True
+        )
+
+        latest_version = None
+        for ver in all_versions:
+            if ver.get('IsLatest'):
+                latest_version = ver
+                break
+
+        if not latest_version and all_versions:  # Fallback
+            latest_version = all_versions[0]
+
+        if latest_version:
+            event_time_iso = latest_version['LastModified'].isoformat(timespec='seconds').replace('+00:00', 'Z')
+            return {
+                "eventTime": event_time_iso,
+                "bucketName": bucket_name,
+                "key": key,
+                "version": latest_version.get("VersionId", "null"),
+                "eventName": "Object Created",
+                "sourceIPAddress": "10.202.9.225"
+            }
+        else:
+            logger.warning(f"No versions found for {bucket_name}/{key}. Skipping.")
+            return None
+
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchBucket':
+            logger.error(f"Bucket '{bucket_name}' not found. Skipping {bucket_name}/{key}.")
+        else:
+            logger.error(f"AWS error processing {bucket_name}/{key}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"An unexpected error occurred for {bucket_name}/{key}: {e}")
+        return None
+
+
+def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
+        input_csv: str = typer.Argument(..., help="Path to the input CSV file."),
+        output_json: str = typer.Option(None, help="Path to the output JSON file."),
+        max_workers: int = typer.Option(10, help="Maximum number of parallel workers for S3 API calls."),
+
+):
+    """
+     Reads a CSV, finds the latest S3 object version for each unique bucketName/key pair,
+     and outputs the results to a JSON file.
+     """
+    s3_client = AWSHelper.get_client('s3')
+    processed_data: List[Dict[str, Any]] = []
+
+    if not output_json:
+        output_json = f"{''.input_csv.split('.')[0:-1]}-pitr-events"
+
+    logger.info(f"Starting to process CSV file: {input_csv}")
+
+    unique_objects: Dict[str, Dict[str, str]] = {}
+    try:
+        with open(input_csv, mode='r', newline='', encoding='utf-8') as infile:
+            reader = csv.DictReader(infile)
+            for row in reader:
+                bucket_name = row.get("bucketName")
+                key = unquote(row.get("key"))
+
+                if not bucket_name or not key:
+                    logger.warning(f"Skipping row due to missing bucketName or key: {row}")
+                    continue
+
+                unique_key = f"{bucket_name}/{key}"
+                if unique_key not in unique_objects:
+                    unique_objects[unique_key] = {"bucketName": bucket_name, "key": key}
+
+        logger.info(f"Identified {len(unique_objects)} unique bucketName/key pairs.")
+
+    except FileNotFoundError:
+        logger.error(f"Error: Input CSV file not found at {input_csv}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        logger.error(f"An error occurred while reading CSV: {e}")
+        raise typer.Exit(code=1)
+
+    # Use ThreadPoolExecutor for parallel S3 calls
+    # boto3 clients are thread-safe for calls, but each thread needs its own client
+    # or you can share one if it's not being modified. For simple gets, sharing is fine.
+    # However, it's generally safer and clearer to create a new client for each worker in a thread pool.
+    # boto3 docs suggest creating a client per thread for most use cases,
+    # or using Session to explicitly manage thread-safety.
+    # For this pattern, recreating client in the worker function is often preferred.
+
+    # We will pass the bucket_name and key to the worker function.
+    # The worker function itself will create a boto3 client if needed,
+    # or we can create one per thread with a callable initializer for the pool.
+    # For simplicity and robust threading, let's pass the client to the worker.
+    # Note: boto3 clients are thread-safe for *concurrent* calls, but not for *modification*.
+    # Here, we are only making calls, so a single client instance passed to multiple threads is generally fine.
+    # If you encounter issues with a shared client in a high-concurrency scenario, consider
+    # instantiating `boto3.client("s3")` inside `get_latest_s3_version`.
+
+    logger.info(f"Starting parallel S3 version lookups with {max_workers} workers...")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_latest_s3_version, s3_client, obj["bucketName"], obj["key"]):
+                f"{obj['bucketName']}/{obj['key']}"
+            for obj in unique_objects.values()
+        }
+
+        for i, future in enumerate(as_completed(futures), 1):
+            obj_path = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    processed_data.append(result)
+            except Exception as exc:
+                logger.error(f'{obj_path} generated an exception: {exc}')
+
+            if i % 100 == 0:
+                logger.info(f"Processed {i}/{len(unique_objects)} objects...")
+
+    logger.info(f"Finished processing S3 versions. Writing {len(processed_data)} entries to {output_json}")
+
+    try:
+        with open(output_json, 'w', encoding='utf-8') as outfile:
+            for entry in processed_data:
+                outfile.write(json.dumps(entry) + '\n')
+
+        logger.info("Processing complete.")
+    except Exception as e:
+        logger.error(f"An error occurred while writing output JSON: {e}")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
      typer.run(pitr)
     # parse_athena_csv_for_restore("sequencer_test.csv", extra_name_suffix="sequencer_test")
