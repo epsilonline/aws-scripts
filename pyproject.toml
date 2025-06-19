@@ -17,7 +17,8 @@ packages = [
     {include = "cloudfront"},
     {include = "documentDB"},
     {include = "waf"},
-    {include = "security"}
+    {include = "security"},
+    {include = "utils"}
 ]
 
 [tool.poetry.dependencies]
