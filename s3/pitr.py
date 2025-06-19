@@ -6,10 +6,19 @@ import typer
 from botocore.exceptions import ClientError
 import logging
 import re
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import unquote
+from typing import Dict, Any, List
+from utils.aws import AWSHelper
 
 logger = logging.getLogger('PITR')
 logger.setLevel(logging.INFO)
-logger.addHandler(logging.StreamHandler())
+handler = logging.StreamHandler()
+logger.addHandler(handler)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 s3control_client = boto3.client('s3control')
 athena_client = boto3.client('athena')
@@ -21,7 +30,8 @@ ATHENA_DATABASE = 'pitr-demo-wtzb6eiepe-s3-db'
 S3_OUTPUT_LOCATION = 's3://pitr-demo-wtzb6eiepe-destination/results/'
 BACKUP_S3_BUCKET = 's3://pitr-demo-wtzb6eiepe-destination/'
 BACKUP_S3_PREFIX = 'pitr/'
-SPLIT_COLUMN_NAME = 'bucketname'
+BUCKET_COLUMN_NAME = 'bucketname'
+SEQUENCER_COLUMN_NAME = 'sequencer'
 TABLE_NAME = 'events-pitr_demo_wtzb6eiepe_7ihznpek1f_inventory'
 QUERIES_FOLDER = './queries/'
 
@@ -39,14 +49,17 @@ ACTION_CONFIGURATION = {
 }
 
 
+def get_sequencer_value(v: dict):
+    return int(v.get(SEQUENCER_COLUMN_NAME, "0") or "0", 16)
+
 
 def raise_error(msg: str, exit: bool = True):
     logger.error(msg)
-    if exit: 
+    if exit:
         raise typer.Exit(code=1)
 
 
-def start_crawler_glue(crawler_name: str,  polling_interval: int = 10, timeout: int = 900) -> bool:
+def start_crawler_glue(crawler_name: str, polling_interval: int = 10, timeout: int = 900) -> bool:
     """
     Start AWS Glue Crowler and wait completition.
 
@@ -114,7 +127,7 @@ def download_s3_file(bucket: str, key: str, local_path: str):
     s3_client.download_file(bucket, key, local_path)
 
 
-def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: str = "", remove_header: bool = False):
+def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: str = ""):
     """Splits a CSV file based on a specified column."""
     split_files = {}
     with open(file_path, 'r') as infile:
@@ -127,13 +140,71 @@ def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: st
             if split_value not in split_files:
                 # Create a new file for this split value
                 split_files[split_value] = open(f'{"_".join([split_value, extra_name_suffix])}.csv', 'w', newline='')
-                writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer = csv.DictWriter(split_files[split_value], fieldnames=reader.fieldnames)
             writer.writerow(row)
 
     # Close all split files
     for f in split_files.values():
         f.close()
+
+    return [f'{"_".join([value, extra_name_suffix])}.csv' for value in split_files.keys()]
+
+
+def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
+    """
+        Splits a CSV file based on column that contain bucket name and for each object key ensure that exist only row
+        that contain last recent version based on sequencer value if exist.
+        This value is hex value and highest mean more recent version.
+        If exist 2 rows with same key and different version without sequencer value, mean that have error in import
+        existing objects job.
+        # For more information refer:
+        https://aws.amazon.com/it/blogs/storage/manage-event-ordering-and-duplicate-events-with-amazon-s3-event-notifications/
+    """
+    split_files = {}
+    row_to_write_by_bucket_name_key = {}
+    with open(file_path, 'r') as infile:
+        reader = csv.DictReader(infile)
+        if BUCKET_COLUMN_NAME not in reader.fieldnames:
+            raise ValueError(f"Split column '{BUCKET_COLUMN_NAME}' not found in CSV headers.")
+
+        for row in reader:
+            bucket_name = row[BUCKET_COLUMN_NAME]
+            row_key = row["key"]
+            row_sequencer = get_sequencer_value(row)
+            if bucket_name not in row_to_write_by_bucket_name_key:
+                # Create a new file for this split value
+                row_to_write_by_bucket_name_key[bucket_name] = {}
+            rows_to_write = row_to_write_by_bucket_name_key[bucket_name]
+            if row_key in rows_to_write:
+                last_written_row_with_same_key = rows_to_write[row_key]
+                last_written_row_with_same_key_sequencer = get_sequencer_value(last_written_row_with_same_key)
+                if row_sequencer < last_written_row_with_same_key_sequencer:
+                    logger.info(f"Skip row for '{bucket_name}/{row_key}' because was found row with most highest "
+                                f"sequencer value")
+                    logger.debug(f"row_sequencer < last_written_row_by_key_sequencer: "
+                                 f"{row_sequencer} < {last_written_row_with_same_key_sequencer}")
+                    # Skip this row
+                    continue
+                elif row_sequencer == last_written_row_with_same_key_sequencer:
+                    if row_sequencer == 0:
+                        raise Exception("Multiple version with at same event time ingested detect")
+                    elif row["version"] == last_written_row_with_same_key["version"]:
+                        logging.debug("Found duplicated row")
+                    elif row["version"] != last_written_row_with_same_key["version"]:
+                        raise Exception("Multiple version with at same event time ingested detect")
+            # If execution reach this line, mean that we need write this row
+            row_to_write_by_bucket_name_key[bucket_name][row_key] = row
+
+        for bucket_name in split_files.keys():
+            f = split_files[bucket_name] = open(f'{"_".join([bucket_name, extra_name_suffix])}.csv', 'w', newline='')
+            writer = csv.DictWriter(f, fieldnames=reader.fieldnames)
+            rows = [{
+                        'bucketname': v['bucketname'],
+                        'key': v['key'],
+                        'version': v['version']
+                     } for _, v in row_to_write_by_bucket_name_key[bucket_name].items()]
+            writer.writerows(rows)
+            f.close()
 
     return [f'{"_".join([value, extra_name_suffix])}.csv' for value in split_files.keys()]
 
@@ -146,7 +217,8 @@ def upload_to_s3(bucket: str, prefix: str, file_paths: list):
         logger.info(f"Uploaded {file_path} to s3://{bucket}/{s3_key}")
 
 
-def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_role_arn: str, action: str, batch_delete_lambda_function_arn: str = None):
+def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_role_arn: str, action: str,
+                             batch_delete_lambda_function_arn: str = None):
     """Starts an S3 Batch Operations job using a Lambda function."""
     destination_bucket_arn = f"arn:aws:s3:::{destination_bucket}"
     operation = {}
@@ -169,7 +241,7 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
                 'InvocationSchemaVersion': '1.0'
             }
         }
-        manifest_fields = ['Bucket', 'Key' ]
+        manifest_fields = ['Bucket', 'Key']
 
     else:
         raise_error("Invalid action")
@@ -180,11 +252,11 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
         raise_error("Invalid manifest file")
 
     response = s3control_client.create_job(
-        AccountId=boto3.client('sts').get_caller_identity()['Account'], # Get current account ID
+        AccountId=boto3.client('sts').get_caller_identity()['Account'],  # Get current account ID
         ConfirmationRequired=False,
         Operation=operation,
         Report={
-            'Bucket': destination_bucket_arn, # Report bucket is usually the same or a different designated bucket
+            'Bucket': destination_bucket_arn,  # Report bucket is usually the same or a different designated bucket
             'Format': 'Report_CSV_20180820',
             'Enabled': True,
             "ReportScope": "AllTasks",
@@ -268,9 +340,13 @@ def do_action(
             return
 
         # 3. Split the CSV file
-        logger.info(f"Splitting CSV file by column '{SPLIT_COLUMN_NAME}'...")
         try:
-            split_files = split_csv_file(local_csv_file, SPLIT_COLUMN_NAME, extra_name_suffix=action)
+            if action == 'restore':
+                logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME} and remove duplicated key'...")
+                split_files = parse_athena_csv_for_restore(local_csv_file, extra_name_suffix=action)
+            else:
+                logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME}'...")
+                split_files = split_csv_file(local_csv_file, BUCKET_COLUMN_NAME, extra_name_suffix=action)
             logger.info(f"Split into files: {split_files}")
 
             # 4. Upload split files to S3
@@ -303,24 +379,23 @@ def do_action(
 
 # ToDo use tags for get values
 def pitr(
-    athena_database: str = typer.Option(..., help="The Athena database to query."),
-    athena_table: str = typer.Option(..., help="The Athena table to query."),
+        athena_database: str = typer.Option(..., help="The Athena database to query."),
+        athena_table: str = typer.Option(..., help="The Athena table to query."),
 
-    delete_file: bool = typer.Option(False, help="Start glue jobs for delete objects"),
-    s3_temp_bucket: str = typer.Option(..., help="The S3 bucket for storing query results and split file backups."),
+        delete_file: bool = typer.Option(False, help="Start glue jobs for delete objects"),
+        s3_temp_bucket: str = typer.Option(..., help="The S3 bucket for storing query results and split file backups."),
 
-    start_time: str = typer.Option(..., help="Start time to restore window. Allowed format: 2025-05-30T04:00:00Z "),
-    end_time: str = typer.Option(..., help="End time to restore window. Allowed format: 2025-05-30T04:00:00Z"),
+        start_time: str = typer.Option(..., help="Start time to restore window. Allowed format: 2025-05-30T04:00:00Z "),
+        end_time: str = typer.Option(..., help="End time to restore window. Allowed format: 2025-05-30T04:00:00Z"),
 
-    restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
-    batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch operation"),
+        restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
+        batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch operation"),
 
-    crawler_name: str = typer.Option(None, help="Glue crawler name, if not provided skip start crawler before "
-                                                "run queries."),
-    crawler_polling_interval: int = typer.Option(10, help="Crawler status polling interval"),
-    crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution")
+        crawler_name: str = typer.Option(None, help="Glue crawler name, if not provided skip start crawler before "
+                                                    "run queries."),
+        crawler_polling_interval: int = typer.Option(10, help="Crawler status polling interval"),
+        crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution")
 ):
-
     if not time_validation_regex.match(start_time) or not time_validation_regex.match(end_time):
         raise_error("Invalid start_time or end_time, use allowed format: 2025-05-30T04:00:00Z ", exit=True)
 
@@ -352,4 +427,5 @@ def pitr(
 
 
 if __name__ == "__main__":
-    typer.run(pitr)
+     typer.run(pitr)
+    # parse_athena_csv_for_restore("sequencer_test.csv", extra_name_suffix="sequencer_test")
