@@ -222,7 +222,7 @@ def upload_to_s3(bucket: str, prefix: str, file_paths: list):
 
 
 def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_role_arn: str, action: str,
-                             batch_delete_lambda_function_arn: str = None):
+                             batch_delete_lambda_function_arn: str = None, confirmation_required: bool = False):
     """Starts an S3 Batch Operations job using a Lambda function."""
     destination_bucket_arn = f"arn:aws:s3:::{destination_bucket}"
     operation = {}
@@ -257,7 +257,7 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
 
     response = s3control_client.create_job(
         AccountId=boto3.client('sts').get_caller_identity()['Account'],  # Get current account ID
-        ConfirmationRequired=False,
+        ConfirmationRequired=confirmation_required,
         Operation=operation,
         Report={
             'Bucket': destination_bucket_arn,  # Report bucket is usually the same or a different designated bucket
@@ -292,7 +292,8 @@ def do_action(
         start_time: str = typer.Option(..., help="Start time to restore window"),
         end_time: str = typer.Option(..., help="End time to restore window"),
         restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
-        batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch operation")
+        batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch mperation"),
+        confirmation_required: bool = typer.Option(False, help="If True don't start batch operation")
 ):
     """
     Runs an Athena query from a file, exports results to CSV, splits the CSV by a column,
@@ -371,7 +372,8 @@ def do_action(
                 bucket_to_restore = bucket_to_restore.split('_')[0]
                 start_s3_batch_operation(manifest_s3_uri, bucket_to_restore, restore_iam_role_arn,
                                          action=batch_operation_action,
-                                         batch_delete_lambda_function_arn=batch_lambda_delete_arn)
+                                         batch_delete_lambda_function_arn=batch_lambda_delete_arn,
+                                         confirmation_required=confirmation_required)
 
         except ValueError as e:
             logger.error(f"Error splitting CSV: {e}")
@@ -399,7 +401,8 @@ def pitr(
         crawler_name: str = typer.Option(None, help="Glue crawler name, if not provided skip start crawler before "
                                                     "run queries."),
         crawler_polling_interval: int = typer.Option(10, help="Crawler status polling interval"),
-        crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution")
+        crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution"),
+        dry_run: bool = typer.Option(False, help="Timeout in seconds before mark as filed crawler execution")
 ):
     if not time_validation_regex.match(start_time) or not time_validation_regex.match(end_time):
         raise_error("Invalid start_time or end_time, use allowed format: 2025-05-30T04:00:00Z ", exit=True)
@@ -416,7 +419,8 @@ def pitr(
         start_time=start_time,
         end_time=end_time,
         restore_iam_role_arn=restore_iam_role_arn,
-        batch_lambda_delete_arn=batch_lambda_delete_arn
+        batch_lambda_delete_arn=batch_lambda_delete_arn,
+        confirmation_required=not dry_run
     )
     if delete_file:
         do_action(
@@ -427,7 +431,8 @@ def pitr(
             start_time=start_time,
             end_time=end_time,
             restore_iam_role_arn=restore_iam_role_arn,
-            batch_lambda_delete_arn=batch_lambda_delete_arn
+            batch_lambda_delete_arn=batch_lambda_delete_arn,
+            confirmation_required=not dry_run
         )
 
 
@@ -575,5 +580,8 @@ def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
 
 
 if __name__ == "__main__":
-     typer.run(pitr)
-    # parse_athena_csv_for_restore("sequencer_test.csv", extra_name_suffix="sequencer_test")
+    # typer.run(pitr)
+    print(parse_athena_csv_for_restore("athena_results.csv", extra_name_suffix="sequencer_test"))
+    # start_s3_batch_operation("s3://pitr-demo-wtzb6eiepe-7ihznpek1f-temp/manifests/usbim-browser-dev-bucket-15218383_restore.csv",
+    #                          destination_bucket="usbim-browser-dev-bucket-15218383",
+    #                          iam_role_arn="pitr-demo-wtzb6eiepe-restore-role", action="copy")
