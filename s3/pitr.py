@@ -495,7 +495,7 @@ def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
     processed_data: List[Dict[str, Any]] = []
 
     if not output_json:
-        output_json = f"{''.input_csv.split('.')[0:-1]}-pitr-events"
+        output_json = f"{''.join(input_csv.split('.')[0])}-pitr-events"
 
     logger.info(f"Starting to process CSV file: {input_csv}")
 
