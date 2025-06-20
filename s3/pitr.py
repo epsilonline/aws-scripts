@@ -270,7 +270,8 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
             'Location': {
                 'ObjectArn': f'arn:aws:s3:::{manifest_s3_uri.split("s3://")[1]}',
                 "ETag": manifest_s3['ETag'],
-            }.update({"VersionId": manifest_s3.get('VersionId')} if 'VersionId' in manifest_s3 else {})
+                **({"ObjectVersionId": manifest_s3.get('VersionId')} if 'VersionId' in manifest_s3 else {})
+            }
         },
         Priority=10,
         RoleArn=iam_role_arn,
