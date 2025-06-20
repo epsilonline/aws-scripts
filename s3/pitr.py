@@ -11,6 +11,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote, quote
 from typing import Dict, Any, List
 from utils.aws import AWSHelper
+from pathlib import Path
+
+file_path = Path(__file__)
+script_folder_path = file_path.parent
 
 logger = logging.getLogger('PITR')
 logger.setLevel(logging.INFO)
@@ -33,7 +37,7 @@ BACKUP_S3_PREFIX = 'pitr/'
 BUCKET_COLUMN_NAME = 'bucketname'
 SEQUENCER_COLUMN_NAME = 'sequencer'
 TABLE_NAME = 'events-pitr_demo_wtzb6eiepe_7ihznpek1f_inventory'
-QUERIES_FOLDER = './queries/'
+QUERIES_FOLDER = script_folder_path / 'queries/'
 
 time_validation_regex = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)")
 
