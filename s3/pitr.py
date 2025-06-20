@@ -300,7 +300,7 @@ def do_action(
     and uploads the split files to an S3 temp location, start glue jons.
     """
     # Read query from file
-    query_path = f"{QUERIES_FOLDER}{ACTION_CONFIGURATION[action]['athena_query_name']}"
+    query_path = f"{QUERIES_FOLDER}/{ACTION_CONFIGURATION[action]['athena_query_name']}"
     s3_query_result_prefix = f"results/"
     s3_query_result_uri = f"s3://{s3_temp_bucket}/{s3_query_result_prefix}"
     s3_bucket_manifest_prefix = f"manifests/"
