@@ -201,10 +201,10 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
 
         for bucket_name in row_to_write_by_bucket_name_key.keys():
             f = split_files[bucket_name] = open(f'{"_".join([bucket_name, extra_name_suffix])}.csv', 'w', newline='')
-            writer = csv.DictWriter(f, fieldnames=reader.fieldnames)
+            writer = csv.DictWriter(f, fieldnames=['bucketname', 'key', 'version'])
             rows = [{
                         'bucketname': v['bucketname'],
-                        'key': quote(v['key']),
+                        'key': v['key'],
                         'version': v['version']
                      } for _, v in row_to_write_by_bucket_name_key[bucket_name].items()]
             writer.writerows(rows)
