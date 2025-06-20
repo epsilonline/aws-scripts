@@ -195,7 +195,7 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
             # If execution reach this line, mean that we need write this row
             row_to_write_by_bucket_name_key[bucket_name][row_key] = row
 
-        for bucket_name in split_files.keys():
+        for bucket_name in row_to_write_by_bucket_name_key.keys():
             f = split_files[bucket_name] = open(f'{"_".join([bucket_name, extra_name_suffix])}.csv', 'w', newline='')
             writer = csv.DictWriter(f, fieldnames=reader.fieldnames)
             rows = [{
