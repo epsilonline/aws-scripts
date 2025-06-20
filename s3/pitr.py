@@ -8,7 +8,7 @@ import logging
 import re
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from typing import Dict, Any, List
 from utils.aws import AWSHelper
 
@@ -200,7 +200,7 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
             writer = csv.DictWriter(f, fieldnames=reader.fieldnames)
             rows = [{
                         'bucketname': v['bucketname'],
-                        'key': v['key'],
+                        'key': quote(v['key']),
                         'version': v['version']
                      } for _, v in row_to_write_by_bucket_name_key[bucket_name].items()]
             writer.writerows(rows)
