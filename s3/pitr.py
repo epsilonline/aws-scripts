@@ -8,7 +8,7 @@ import logging
 import re
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote, quote
+from urllib.parse import unquote
 from typing import Dict, Any, List
 from utils.aws import AWSHelper
 from pathlib import Path
@@ -420,7 +420,7 @@ def pitr(
         end_time=end_time,
         restore_iam_role_arn=restore_iam_role_arn,
         batch_lambda_delete_arn=batch_lambda_delete_arn,
-        confirmation_required=not dry_run
+        confirmation_required=dry_run
     )
     if delete_file:
         do_action(
@@ -432,7 +432,7 @@ def pitr(
             end_time=end_time,
             restore_iam_role_arn=restore_iam_role_arn,
             batch_lambda_delete_arn=batch_lambda_delete_arn,
-            confirmation_required=not dry_run
+            confirmation_required=dry_run
         )
 
 
@@ -580,8 +580,8 @@ def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
 
 
 if __name__ == "__main__":
-    # typer.run(pitr)
-    print(parse_athena_csv_for_restore("athena_results.csv", extra_name_suffix="sequencer_test"))
+    typer.run(pitr)
+    # print(parse_athena_csv_for_restore("athena_results.csv", extra_name_suffix="sequencer_test"))
     # start_s3_batch_operation("s3://pitr-demo-wtzb6eiepe-7ihznpek1f-temp/manifests/usbim-browser-dev-bucket-15218383_restore.csv",
     #                          destination_bucket="usbim-browser-dev-bucket-15218383",
     #                          iam_role_arn="pitr-demo-wtzb6eiepe-restore-role", action="copy")
