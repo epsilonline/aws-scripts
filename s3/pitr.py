@@ -190,10 +190,10 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
                     # Skip this row
                     continue
                 elif row_sequencer == last_written_row_with_same_key_sequencer:
-                    if row_sequencer == 0:
-                        raise Exception("Multiple version with at same event time ingested detect")
-                    elif row["version"] == last_written_row_with_same_key["version"]:
+                    if row["version"] == last_written_row_with_same_key["version"]:
                         logging.debug("Found duplicated row")
+                    elif row_sequencer == 0:
+                        raise Exception("Multiple version with at same event time ingested detect")
                     elif row["version"] != last_written_row_with_same_key["version"]:
                         raise Exception("Multiple version with at same event time ingested detect")
             # If execution reach this line, mean that we need write this row
