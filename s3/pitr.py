@@ -199,6 +199,10 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = "",
                     elif row_sequencer == 0:
                         if skip_duplicated_version_at_same_time:
                             duplicated_version_at_same_time_rows[row_key] = row
+                            logging.info(f"Skip object {bucket_name}/{row_key}")
+                            continue
+                        else:
+                            raise Exception("Multiple version with at same event time ingested detect")
                     elif row["version"] != last_written_row_with_same_key["version"]:
                         if skip_duplicated_version_at_same_time:
                             duplicated_version_at_same_time_rows[row_key] = row
@@ -275,7 +279,7 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
         ConfirmationRequired=confirmation_required,
         Operation=operation,
         Report={
-            'Bucket': destination_bucket_arn,  # Report bucket is usually the same or a different designated bucket
+            'Bucket': report_bucket_arn,  # Report bucket is usually the same or a different designated bucket
             'Format': 'Report_CSV_20180820',
             'Enabled': True,
             "ReportScope": "AllTasks",
@@ -294,7 +298,7 @@ def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_
         },
         Priority=10,
         RoleArn=iam_role_arn,
-        Description=f'Restore with PITR bucket {destination_bucket}'
+        Description=f'{action} with PITR bucket {destination_bucket}'
     )
     return response['JobId']
 
@@ -349,7 +353,7 @@ def do_action(
         # Determine the output file key
         # Athena adds .csv and .metadata files with the query execution ID as the name
         output_key = f"{s3_query_result_uri.split('s3://')[1]}{query_execution_id}.csv"
-        local_csv_file = 'athena_results.csv'
+        local_csv_file = f'athena_results_{action}.csv'
 
         # Download the result file
         logger.info(f"Downloading results from s3://{s3_query_result_uri.split('s3://')[1]}{query_execution_id}.csv...")
@@ -390,6 +394,7 @@ def do_action(
                 # name contains action split for get bucket name
                 bucket_to_restore = bucket_to_restore.split('_')[0]
                 start_s3_batch_operation(manifest_s3_uri, bucket_to_restore, restore_iam_role_arn,
+                                         report_bucket_arn=f"arn:aws:s3:::{s3_temp_bucket}",
                                          action=batch_operation_action,
                                          batch_delete_lambda_function_arn=batch_lambda_delete_arn,
                                          confirmation_required=confirmation_required)
@@ -603,6 +608,8 @@ def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
 
 if __name__ == "__main__":
     typer.run(pitr)
+    # split_files = parse_athena_csv_for_restore("./athena_results_restore.csv", extra_name_suffix="restore",
+    #                                           skip_duplicated_version_at_same_time=True)
     # print(parse_athena_csv_for_restore("athena_results.csv", extra_name_suffix="sequencer_test"))
     # start_s3_batch_operation("s3://pitr-demo-wtzb6eiepe-7ihznpek1f-temp/manifests/usbim-browser-dev-bucket-15218383_restore.csv",
     #                          destination_bucket="usbim-browser-dev-bucket-15218383",
