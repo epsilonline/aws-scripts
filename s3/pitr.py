@@ -154,7 +154,8 @@ def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: st
     return [f'{"_".join([value, extra_name_suffix])}.csv' for value in split_files.keys()]
 
 
-def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
+def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = "",
+                                 skip_duplicated_version_at_same_time: bool = False):
     """
         Splits a CSV file based on column that contain bucket name and for each object key ensure that exist only row
         that contain last recent version based on sequencer value if exist.
@@ -165,6 +166,7 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
         https://aws.amazon.com/it/blogs/storage/manage-event-ordering-and-duplicate-events-with-amazon-s3-event-notifications/
     """
     split_files = {}
+    duplicated_version_at_same_time_rows = {}
     row_to_write_by_bucket_name_key = {}
     with open(file_path, 'r') as infile:
         reader = csv.DictReader(infile)
@@ -193,9 +195,15 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
                     if row["version"] == last_written_row_with_same_key["version"]:
                         logging.debug("Found duplicated row")
                     elif row_sequencer == 0:
-                        raise Exception("Multiple version with at same event time ingested detect")
+                        if skip_duplicated_version_at_same_time:
+                            duplicated_version_at_same_time_rows[row_key] = row
                     elif row["version"] != last_written_row_with_same_key["version"]:
-                        raise Exception("Multiple version with at same event time ingested detect")
+                        if skip_duplicated_version_at_same_time:
+                            duplicated_version_at_same_time_rows[row_key] = row
+                            logging.info(f"Skip object {bucket_name}/{row_key}")
+                            continue
+                        else:
+                            raise Exception("Multiple version with at same event time ingested detect")
             # If execution reach this line, mean that we need write this row
             row_to_write_by_bucket_name_key[bucket_name][row_key] = row
 
@@ -210,6 +218,10 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = ""):
             writer.writerows(rows)
             f.close()
 
+        with open('duplicated_version_at_same_time.csv', 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=["bucketname", "key", "version", "sequencer"])
+            writer.writerows([v for _, v in duplicated_version_at_same_time_rows.items()])
+
     return [f'{"_".join([value, extra_name_suffix])}.csv' for value in split_files.keys()]
 
 
@@ -222,6 +234,7 @@ def upload_to_s3(bucket: str, prefix: str, file_paths: list):
 
 
 def start_s3_batch_operation(manifest_s3_uri: str, destination_bucket: str, iam_role_arn: str, action: str,
+                             report_bucket_arn: str,
                              batch_delete_lambda_function_arn: str = None, confirmation_required: bool = False):
     """Starts an S3 Batch Operations job using a Lambda function."""
     destination_bucket_arn = f"arn:aws:s3:::{destination_bucket}"
@@ -293,7 +306,9 @@ def do_action(
         end_time: str = typer.Option(..., help="End time to restore window"),
         restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
         batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch mperation"),
-        confirmation_required: bool = typer.Option(False, help="If True don't start batch operation")
+        confirmation_required: bool = typer.Option(False, help="If True don't start batch operation"),
+        skip_duplicated_version_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
+                                                                              "with duplicated version at same time")
 ):
     """
     Runs an Athena query from a file, exports results to CSV, splits the CSV by a column,
@@ -349,7 +364,9 @@ def do_action(
         try:
             if action == 'restore':
                 logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME} and remove duplicated key'...")
-                split_files = parse_athena_csv_for_restore(local_csv_file, extra_name_suffix=action)
+                split_files = parse_athena_csv_for_restore(local_csv_file, extra_name_suffix=action,
+                                                           skip_duplicated_version_at_same_time=
+                                                           skip_duplicated_version_at_same_time)
             else:
                 logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME}'...")
                 split_files = split_csv_file(local_csv_file, BUCKET_COLUMN_NAME, extra_name_suffix=action)
@@ -402,7 +419,9 @@ def pitr(
                                                     "run queries."),
         crawler_polling_interval: int = typer.Option(10, help="Crawler status polling interval"),
         crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution"),
-        dry_run: bool = typer.Option(False, help="Timeout in seconds before mark as filed crawler execution")
+        dry_run: bool = typer.Option(False, help="Timeout in seconds before mark as filed crawler execution"),
+        skip_duplicated_version_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
+                                                                              "with duplicated version at same time")
 ):
     if not time_validation_regex.match(start_time) or not time_validation_regex.match(end_time):
         raise_error("Invalid start_time or end_time, use allowed format: 2025-05-30T04:00:00Z ", exit=True)
@@ -420,7 +439,8 @@ def pitr(
         end_time=end_time,
         restore_iam_role_arn=restore_iam_role_arn,
         batch_lambda_delete_arn=batch_lambda_delete_arn,
-        confirmation_required=dry_run
+        confirmation_required=dry_run,
+        skip_duplicated_version_at_same_time=skip_duplicated_version_at_same_time
     )
     if delete_file:
         do_action(
