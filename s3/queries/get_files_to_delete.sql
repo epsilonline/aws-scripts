@@ -1,9 +1,9 @@
 WITH deletedfiles AS (select a.bucketname, a.key, a.version, a.eventname, a.eventtime
-FROM   ( select key, max(eventtime) maxeventtime
+FROM   ( select key, bucketname, max(eventtime) maxeventtime
             FROM "$TABLE_NAME" WHERE eventtime <= '$END_TIME' AND eventname like 'Object Deleted'
-            group by key) b,
+            group by key, bucketname) b,
     "$TABLE_NAME" a
-WHERE  a.key = b.key
+WHERE  a.key = b.key and a.bucketname = b.bucketname
 AND a.eventtime = b.maxeventtime
 order by key asc), 
 newfiles
