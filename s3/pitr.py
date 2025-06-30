@@ -77,6 +77,7 @@ def start_crawler_glue(crawler_name: str, polling_interval: int = 10, timeout: i
 
     try:
         response = glue_client.start_crawler(Name=crawler_name)
+
         logger.info(f"Crawler '{crawler_name}' started.")
         elapsed = 0
         while elapsed < timeout:
@@ -96,9 +97,10 @@ def start_crawler_glue(crawler_name: str, polling_interval: int = 10, timeout: i
 
     except ClientError as e:
         if e.response['Error']['Code'] == 'CrawlerRunningException':
-            logger.info(f"Crawler '{crawler_name}' already in execution.")
+            logger.error(f"Crawler '{crawler_name}' already in execution. Wait completition and relaunch script.")
+            exit(-1)
         else:
-            logger.info(f"Error while starting crawler {e}")
+            logger.error(f"Error while starting crawler {e}")
         return False
 
 
