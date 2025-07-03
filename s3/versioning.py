@@ -1,7 +1,11 @@
 import typer
 from botocore.exceptions import ClientError
+
+from utils.logger import get_logger
 from utils.s3 import get_buckets_by_tag
 from utils.aws import AWSHelper
+
+logger = get_logger(__name__)
 
 
 def set_bucket_versioning(bucket_name: str, status: str):
@@ -92,6 +96,27 @@ def check_buckets_versioning():
             print(bucket)
     else:
         print("No bucket found with enabled versioning\n")
+
+
+def check_bucket_versioning(bucket_name: str) -> bool:
+
+    s3_client = AWSHelper.get_client("s3")
+
+    logger.info(f"Checking versioning status for bucket '{bucket_name}'...")
+    try:
+        response = s3_client.get_bucket_versioning(Bucket=bucket_name)
+        status = response.get('Status', 'NotEnabled')
+        if status == 'Enabled':
+            logger.info(f"Confirmed: Versioning is 'Enabled' for bucket '{bucket_name}'.")
+            return True
+        else:
+            logger.error(f"Versioning is NOT 'Enabled' for bucket '{bucket_name}' (Current status: {status}).")
+            logger.error("Script cannot proceed. Please enable versioning on the bucket first.")
+            return False
+    except ClientError as e:
+        logger.error(f"An AWS error occurred while checking versioning: {e}")
+        return False
+
 
 
 if __name__ == "__main__":

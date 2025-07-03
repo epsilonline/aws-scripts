@@ -12,3 +12,9 @@ def setup_logging(verbose: bool = False):
     # Suppress overly verbose boto3 logging
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
+
+
+def get_logger(name: str, verbose: bool = False):
+    setup_logging(verbose)
+    logger = logging.getLogger(name)
+    return logger
