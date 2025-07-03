@@ -157,7 +157,7 @@ def split_csv_file(file_path: str, split_column_name: str, extra_name_suffix: st
 
 
 def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = "",
-                                 skip_duplicated_version_at_same_time: bool = False):
+                                 skip_duplicated_versions_at_same_time: bool = False):
     """
         Splits a CSV file based on column that contain bucket name and for each object key ensure that exist only row
         that contain last recent version based on sequencer value if exist.
@@ -197,14 +197,14 @@ def parse_athena_csv_for_restore(file_path: str, extra_name_suffix: str = "",
                     if row["version"] == last_written_row_with_same_key["version"]:
                         logging.debug("Found duplicated row")
                     elif row_sequencer == 0:
-                        if skip_duplicated_version_at_same_time:
+                        if skip_duplicated_versions_at_same_time:
                             duplicated_version_at_same_time_rows[row_key] = row
                             logging.info(f"Skip object {bucket_name}/{row_key}")
                             continue
                         else:
                             raise Exception("Multiple version with at same event time ingested detect")
                     elif row["version"] != last_written_row_with_same_key["version"]:
-                        if skip_duplicated_version_at_same_time:
+                        if skip_duplicated_versions_at_same_time:
                             duplicated_version_at_same_time_rows[row_key] = row
                             logging.info(f"Skip object {bucket_name}/{row_key}")
                             continue
@@ -308,13 +308,15 @@ def do_action(
         athena_table: str = typer.Option(..., help="The Athena table to query."),
         action: str = typer.Option(..., help="The action to perform"),
         s3_temp_bucket: str = typer.Option(..., help="The S3 bucket for storing query results and split file backups."),
-        start_time: str = typer.Option(..., help="Start time to restore window"),
-        end_time: str = typer.Option(..., help="End time to restore window"),
+        snapshot_end_time: str = typer.Option(..., help="End time to restore window"),
         restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
         batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch mperation"),
         confirmation_required: bool = typer.Option(False, help="If True don't start batch operation"),
-        skip_duplicated_version_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
-                                                                              "with duplicated version at same time")
+        skip_duplicated_versions_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
+                                                                              "with duplicated version at same time"),
+        buckets_to_skip=typer.Option('', help="Comma separated list of buckets to skip."),
+        buckets_to_restore=typer.Option('', help="Comma separated list of buckets to restore. "
+                                                  "If not used restore all buckets.")
 ):
     """
     Runs an Athena query from a file, exports results to CSV, splits the CSV by a column,
@@ -326,6 +328,8 @@ def do_action(
     s3_query_result_uri = f"s3://{s3_temp_bucket}/{s3_query_result_prefix}"
     s3_bucket_manifest_prefix = f"manifests/"
     s3_bucket_batch_operation_manifest_uri = f"s3://{s3_temp_bucket}/{s3_bucket_manifest_prefix}"
+    buckets_to_skip = buckets_to_skip.split(',') or []
+    buckets_to_restore = buckets_to_restore.split(',') or []
 
     try:
         with open(query_path, 'r') as f:
@@ -336,8 +340,7 @@ def do_action(
 
     # Substitute variables in query
     athena_query = athena_query.replace("$TABLE_NAME", athena_table)
-    athena_query = athena_query.replace("$START_TIME", start_time)
-    athena_query = athena_query.replace("$END_TIME", end_time)
+    athena_query = athena_query.replace("$SNAPSHOT_END_TIME", snapshot_end_time)
 
     # 1. Run Athena Query
     logger.info("Running Athena query...")
@@ -371,8 +374,8 @@ def do_action(
             if action == 'restore':
                 logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME} and remove duplicated key'...")
                 split_files = parse_athena_csv_for_restore(local_csv_file, extra_name_suffix=action,
-                                                           skip_duplicated_version_at_same_time=
-                                                           skip_duplicated_version_at_same_time)
+                                                           skip_duplicated_versions_at_same_time=
+                                                           skip_duplicated_versions_at_same_time)
             else:
                 logger.info(f"Splitting CSV file by column '{BUCKET_COLUMN_NAME}'...")
                 split_files = split_csv_file(local_csv_file, BUCKET_COLUMN_NAME, extra_name_suffix=action)
@@ -388,7 +391,14 @@ def do_action(
             # for split_file in split_files:
             #     os.remove(split_file)
             for bucket_to_restore in split_files:
-                logger.info(f"Start batch operation for restore old version in bucket: {bucket_to_restore}")
+                bucket_name = bucket_to_restore.replace(f"_{action}.csv", "")
+                if bucket_name in buckets_to_skip:
+                    # Skip bucket
+                    continue
+                if len(buckets_to_restore) > 0 and bucket_name not in buckets_to_restore:
+                    # User chooses to restore specific buckets, but this bucket isn't included. Skip it.
+                    continue
+                logger.info(f"Start batch operation for restore old version in bucket: {bucket_name}")
                 manifest_s3_uri = f"{s3_bucket_batch_operation_manifest_uri}{bucket_to_restore}"
                 batch_operation_action = ACTION_CONFIGURATION[action]["s3_batch_action"]
                 # name contains action split for get bucket name
@@ -413,11 +423,10 @@ def pitr(
         athena_database: str = typer.Option(..., help="The Athena database to query."),
         athena_table: str = typer.Option(..., help="The Athena table to query."),
 
-        delete_file: bool = typer.Option(False, help="Start glue jobs for delete objects"),
+        skip_delete_objects: bool = typer.Option(False, help="Start glue jobs for delete objects"),
         s3_temp_bucket: str = typer.Option(..., help="The S3 bucket for storing query results and split file backups."),
 
-        start_time: str = typer.Option(..., help="Start time to restore window. Allowed format: 2025-05-30T04:00:00Z "),
-        end_time: str = typer.Option(..., help="End time to restore window. Allowed format: 2025-05-30T04:00:00Z"),
+        snapshot_end_time: str = typer.Option(..., help="End time to restore window. Allowed format: 2025-05-30T04:00:00Z"),
 
         restore_iam_role_arn: str = typer.Option(..., help="IAM role used for batch operations"),
         batch_lambda_delete_arn: str = typer.Option(..., help="ARN of lambda for delete in batch operation"),
@@ -427,11 +436,14 @@ def pitr(
         crawler_polling_interval: int = typer.Option(10, help="Crawler status polling interval"),
         crawler_timeout: int = typer.Option(900, help="Timeout in seconds before mark as filed crawler execution"),
         dry_run: bool = typer.Option(False, help="Timeout in seconds before mark as filed crawler execution"),
-        skip_duplicated_version_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
-                                                                              "with duplicated version at same time")
+        skip_duplicated_versions_at_same_time: bool = typer.Option(False, help="If true skip restore of object "
+                                                                              "with duplicated version at same time"),
+        buckets_to_skip=typer.Option('', help="Comma separated list of buckets to skip."),
+        buckets_to_restore=typer.Option('', help="Comma separated list of buckets to restore. "
+                                                "If not used restore all buckets.")
 ):
-    if not time_validation_regex.match(start_time) or not time_validation_regex.match(end_time):
-        raise_error("Invalid start_time or end_time, use allowed format: 2025-05-30T04:00:00Z ", exit=True)
+    if not time_validation_regex.match(snapshot_end_time):
+        raise_error("Invalid snapshot_end_time, use allowed format: 2025-05-30T04:00:00Z ", exit=True)
 
     if crawler_name:
         start_crawler_glue(crawler_name,
@@ -442,24 +454,26 @@ def pitr(
         athena_table=athena_table,
         action="restore",
         s3_temp_bucket=s3_temp_bucket,
-        start_time=start_time,
-        end_time=end_time,
+        snapshot_end_time=snapshot_end_time,
         restore_iam_role_arn=restore_iam_role_arn,
         batch_lambda_delete_arn=batch_lambda_delete_arn,
         confirmation_required=dry_run,
-        skip_duplicated_version_at_same_time=skip_duplicated_version_at_same_time
+        skip_duplicated_versions_at_same_time=skip_duplicated_versions_at_same_time,
+        buckets_to_skip=buckets_to_skip,
+        buckets_to_restore=buckets_to_restore
     )
-    if delete_file:
+    if not skip_delete_objects:
         do_action(
             athena_database=athena_database,
             athena_table=athena_table,
             action="delete",
             s3_temp_bucket=s3_temp_bucket,
-            start_time=start_time,
-            end_time=end_time,
+            snapshot_end_time=snapshot_end_time,
             restore_iam_role_arn=restore_iam_role_arn,
             batch_lambda_delete_arn=batch_lambda_delete_arn,
-            confirmation_required=dry_run
+            confirmation_required=dry_run,
+            buckets_to_skip=buckets_to_skip,
+            buckets_to_restore=buckets_to_restore
         )
 
 
@@ -609,7 +623,7 @@ def pitr_ingest_existing_objects_with_multiple_versions_at_same_time(
 if __name__ == "__main__":
     typer.run(pitr)
     # split_files = parse_athena_csv_for_restore("./athena_results_restore.csv", extra_name_suffix="restore",
-    #                                           skip_duplicated_version_at_same_time=True)
+    #                                           skip_duplicated_versions_at_same_time=True)
     # print(parse_athena_csv_for_restore("athena_results.csv", extra_name_suffix="sequencer_test"))
     # start_s3_batch_operation("s3://pitr-demo-wtzb6eiepe-7ihznpek1f-temp/manifests/usbim-browser-dev-bucket-15218383_restore.csv",
     #                          destination_bucket="usbim-browser-dev-bucket-15218383",

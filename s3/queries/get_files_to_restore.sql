@@ -1,7 +1,7 @@
 WITH versionAtTS AS 
 (select a.bucketname, a.key, a.version, a.eventname, a.eventtime, a.sequencer
 from   ( select key, bucketname, max(eventtime) maxeventtime
-        from "$TABLE_NAME" where eventtime <= '$END_TIME'
+        from "$TABLE_NAME" where eventtime <= '$SNAPSHOT_END_TIME'
         group by key, bucketname) b,
     "$TABLE_NAME" a
 where  a.key = b.key and a.bucketname = b.bucketname
