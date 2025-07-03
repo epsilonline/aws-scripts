@@ -19,6 +19,7 @@ app.command()(add_inventory_configuration)
 app.command()(remove_inventory_configuration)
 app.command()(pitr_ingest_existing_objects_with_multiple_versions_at_same_time)
 app.command()(clean_batch_operation_pending_jobs)
+app.command()(restore_all_deleted_objects)
 
 if __name__ == "__main__":
     app()
