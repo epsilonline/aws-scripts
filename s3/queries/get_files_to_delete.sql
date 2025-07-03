@@ -1,13 +1,30 @@
-WITH deletedfiles AS (select a.bucketname, a.key, a.version, a.eventname, a.eventtime
-FROM   ( select key, bucketname, max(eventtime) maxeventtime
-            FROM "$TABLE_NAME" WHERE eventtime <= '$END_TIME' AND eventname like 'Object Deleted'
-            group by key, bucketname) b,
-    "$TABLE_NAME" a
-WHERE  a.key = b.key and a.bucketname = b.bucketname
-AND a.eventtime = b.maxeventtime
-order by key asc), 
-newfiles
-AS
-(SELECT distinct bucketname, key FROM "$TABLE_NAME" WHERE (EventName like 'Object Created') and 
-key not in (select key FROM "$TABLE_NAME" where eventtime <= '$END_TIME' ))
-SELECT bucketname, key FROM deletedfiles WHERE key in (select key FROM "$TABLE_NAME" WHERE eventtime > '$END_TIME'  AND eventname like 'Object Created') UNION SELECT * FROM newfiles
+WITH StateAtSnapshot AS (
+    SELECT bucketname, key, eventname AS last_event_type_at_snapshot, eventtime AS last_event_time_at_snapshot
+    FROM (
+        SELECT bucketname, key, eventname, eventtime, ROW_NUMBER() OVER (PARTITION BY bucketname, key ORDER BY eventtime DESC) as rn
+        FROM "$TABLE_NAME"
+        WHERE eventtime <= '$SNAPSHOT_END_TIME'
+    ) AS sub
+    WHERE rn = 1
+),
+CurrentState AS (
+    SELECT bucketname, key, eventname AS current_last_event_type, eventtime AS current_last_event_time
+    FROM (
+        SELECT bucketname, key, eventname, eventtime, ROW_NUMBER() OVER (PARTITION BY bucketname, key ORDER BY eventtime DESC) as rn
+        FROM "$TABLE_NAME"
+    ) AS sub
+    WHERE rn = 1
+)
+SELECT
+    cs.bucketname,
+    cs.key
+    --'NEWLY_CREATED_SINCE_SNAPSHOT' AS status
+FROM CurrentState cs
+LEFT JOIN StateAtSnapshot sas
+    ON cs.bucketname = sas.bucketname AND cs.key = sas.key
+WHERE cs.current_last_event_type LIKE 'Object Created'
+-- sas.key is null mean that object not exist before snapshot
+-- if sas.last_event_type_at_snapshot LIKE 'Object Deleted' and cs.current_last_event_type LIKE 'Object Created'
+-- mean that object was created after snapshot
+  AND (sas.key IS NULL OR sas.last_event_type_at_snapshot LIKE 'Object Deleted')
+  AND cs.current_last_event_time > '$SNAPSHOT_END_TIME'
