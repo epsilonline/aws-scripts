@@ -64,8 +64,7 @@ def disable_versioning(
         typer.echo("🚫 Operation cancelled.")
 
 
-def check_bucket_versioning(account_profile: str = typer.Argument(..., help="Aws Profile"),
-                            region: str = typer.Argument(..., help="Aws Region")):
+def check_buckets_versioning():
     s3_client = AWSHelper.get_client("s3")
 
     buckets = s3_client.list_buckets()
@@ -76,11 +75,10 @@ def check_bucket_versioning(account_profile: str = typer.Argument(..., help="Aws
     for bucket in buckets['Buckets']:
 
         bucket_name = bucket['Name']
-        bucket_location = s3_client.get_bucket_location(Bucket=bucket_name)['LocationConstraint']
 
         try:
 
-            if bucket_location == region and "website" not in bucket_name.lower() and "src" not in bucket_name.lower() and "source" not in bucket_name.lower():
+            if "website" not in bucket_name.lower() and "src" not in bucket_name.lower() and "source" not in bucket_name.lower():
                 versioning = s3_client.get_bucket_versioning(Bucket=bucket_name)
 
                 if 'Status' in versioning and versioning['Status'] == 'Enabled':
@@ -100,6 +98,6 @@ if __name__ == "__main__":
     app = typer.Typer()
 
     # Add commands here
-    app.command()(check_bucket_versioning)
+    app.command()(check_buckets_versioning)
     app.command()(enable_versioning)
     app.command()(disable_versioning)
