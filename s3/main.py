@@ -6,6 +6,7 @@ from s3.restore_deleted_objects import restore_all_deleted_objects
 from s3.versioning import enable_versioning, disable_versioning, check_buckets_versioning
 from s3.eventbridge import enable_notifications, disable_notifications
 from s3.s3_batch_operations import clean_batch_operation_pending_jobs
+from s3.replica import enable_replication
 app = typer.Typer()
 
 # Add commands here
@@ -20,6 +21,7 @@ app.command()(remove_inventory_configuration)
 app.command()(pitr_ingest_existing_objects_with_multiple_versions_at_same_time)
 app.command()(clean_batch_operation_pending_jobs)
 app.command()(restore_all_deleted_objects)
+app.command()(enable_replication)
 
 if __name__ == "__main__":
     app()
