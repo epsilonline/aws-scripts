@@ -62,3 +62,51 @@ buckets:
     change_ownership: true
     role: arn:aws:iam::123456789012:role/s3-replication-role-specific
 ```
+
+# S3 Manage destination policy 
+
+Quando si configura una replica S3 cross-account, il bucket di destinazione deve possedere una *Bucket Policy* che autorizzi esplicitamente il ruolo IAM dell'account sorgente a depositare gli oggetti. Il comando `manage-destination-policy` automatizza l'aggiunta, l'aggiornamento e la rimozione di questi permessi.
+
+## Esempio config.yaml
+
+```yaml
+
+# Variabili globali per la policy
+global_enable_replication: true
+replication_role_arn: "arn:aws:iam::123456789012:role/s3-replication-role"
+
+
+# Lista dei SID gestiti dallo script,
+managed_sids:
+  - "AllowS3Replication"
+  - "AllowS3ReplicationBucketLevel"
+
+policy_statements_template:
+  - Sid: "AllowS3Replication"
+    Effect: "Allow"
+    Principal:
+      AWS: "{replication_role_arn}"
+    Action:
+      - "s3:ReplicateObject"
+      - "s3:ReplicateDelete"
+      - "s3:ReplicateTags"
+      - "s3:ObjectOwnerOverrideToBucketOwner"
+    Resource: "arn:aws:s3:::{bucket_name}/*"
+
+  - Sid: "AllowS3ReplicationBucketLevel"
+    Effect: "Allow"
+    Principal:
+      AWS: "{replication_role_arn}"
+    Action:
+      - "s3:List*"
+      - "s3:GetBucketVersioning"
+      - "s3:PutBucketVersioning"
+    Resource: "arn:aws:s3:::{bucket_name}"
+
+# Configurazione dei bucket target
+buckets:
+  mio-bucket-destinazione-1: {}
+    
+  mio-bucket-destinazione-2:
+    enable_replication: false
+```
