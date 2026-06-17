@@ -17,18 +17,22 @@ def set_eventbridge_notification(bucket_name: str, enable: bool):
     action_text = "enabled" if enable else "disabled"
     human_action = "Enabling" if enable else "Disabling"
 
+    # Fetch the current notification configuration to preserve existing settings (like SQS, SNS, Lambda) when enabling EventBridge.
+    current_config = s3_client.get_bucket_notification_configuration(Bucket=bucket_name)
+    current_config.pop('ResponseMetadata', None)
+
     if enable:
         # To enable, we add an EventBridgeConfiguration. This sends all events.
-        notification_config = {'EventBridgeConfiguration': {}}
+        current_config['EventBridgeConfiguration'] = {}
     else:
         # To disable, we set an empty NotificationConfiguration,
         # which removes ALL notification settings (SQS, SNS, Lambda, EventBridge).
-        notification_config = {}
+        current_config.pop('EventBridgeConfiguration', None)
 
     try:
         s3_client.put_bucket_notification_configuration(
             Bucket=bucket_name,
-            NotificationConfiguration=notification_config
+            NotificationConfiguration=current_config
         )
         typer.secho(f"👍 EventBridge integration {action_text} for bucket: {bucket_name}", fg=typer.colors.GREEN)
     except ClientError as e:
