@@ -10,6 +10,7 @@ from s3.replica_bucket_policy import manage_destination_policy
 from s3.create_batch_operations import create_batch_operations
 from s3.multipart import multipart_copy
 from s3.replica import enable_replication
+from s3.tags import append_bucket_tags
 
 app = typer.Typer()
 
@@ -29,5 +30,6 @@ app.command()(restore_all_deleted_objects)
 app.command()(enable_replication)
 app.command()(manage_destination_policy)
 app.command()(multipart_copy)
+app.command()(append_bucket_tags)
 if __name__ == "__main__":
     app()
